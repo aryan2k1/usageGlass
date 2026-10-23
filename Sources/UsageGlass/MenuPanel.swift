@@ -5,10 +5,10 @@ struct MenuLabel: View {
     @EnvironmentObject private var store: UsageStore
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: "chart.bar.xaxis")
-            ForEach(ProviderID.allCases) { provider in
+            Image(systemName: store.focusedProvider.map(\.symbol) ?? "chart.bar.xaxis")
+            ForEach(store.focusedProvider.map { [$0] } ?? ProviderID.allCases) { provider in
                 let percentage = store.snapshot(for: provider).windows.compactMap(\.usedPercent).filter(\.isFinite).map { min(max($0, 0), 100) }.max()
-                Text("\(provider == .codex ? "Cdx" : "Claude") \(percentage.map { String(Int($0.rounded())) + "%" } ?? "—")")
+                Text("\(provider == .codex ? (store.focusedProvider == nil ? "Cdx" : "Codex") : "Claude") \(percentage.map { String(Int($0.rounded())) + "%" } ?? "—")")
                     .monospacedDigit()
             }
         }.accessibilityLabel(accessibilitySummary)
@@ -27,10 +27,12 @@ struct MenuPanel: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(ProviderID.allCases) { provider in MenuProviderRow(provider: provider) }
+            ForEach(store.orderedProviders) { provider in MenuProviderRow(provider: provider) }
             HStack(spacing: 14) {
                 Button("Dashboard") { openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true) }
                 Spacer()
+                Button { store.followActive.toggle() } label: { Image(systemName: store.followActive ? "bolt.horizontal.fill" : "bolt.horizontal") }
+                    .help(store.followActive ? "Following the tool in use (click to turn off)" : "Follow the tool in use").accessibilityLabel("Follow active tool")
                 Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.isRefreshing).help("Refresh").accessibilityLabel("Refresh usage")
                 Button("Quit") { NSApp.terminate(nil) }
@@ -44,6 +46,7 @@ struct MenuProviderRow: View {
     let provider: ProviderID
     @EnvironmentObject private var store: UsageStore
     @State private var expanded = false
+    private var isActive: Bool { store.followActive && store.activeProvider == provider }
 
     var body: some View {
         let snapshot = store.snapshot(for: provider)
@@ -56,6 +59,11 @@ struct MenuProviderRow: View {
                     HStack(spacing: 8) {
                         ProviderMark(provider: provider, size: 17)
                         Text(provider.title).font(.subheadline.weight(.medium))
+                        if isActive {
+                            HStack(spacing: 4) { Circle().fill(UsagePalette.color(0)).frame(width: 5, height: 5); Text("In use") }
+                                .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                                .accessibilityLabel("Currently in use")
+                        }
                         Spacer()
                         if let value {
                             Text("\(Int(value.rounded()))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(UsagePalette.color(value))
@@ -74,6 +82,8 @@ struct MenuProviderRow: View {
 
             if expanded { details(snapshot) }
         }
+        .onAppear { expanded = isActive }
+        .onChange(of: isActive) { _, nowActive in withAnimation(.snappy(duration: 0.2)) { expanded = nowActive } }
     }
 
     @ViewBuilder private func details(_ snapshot: ProviderSnapshot) -> some View {

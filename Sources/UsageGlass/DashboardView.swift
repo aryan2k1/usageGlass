@@ -55,6 +55,11 @@ struct DashboardView: View {
                 }.ignoresSafeArea()
             }
         }
+        .onChange(of: store.activeProvider) { _, active in
+            // Follow the tool in use when viewing a provider page; leave other pages alone.
+            guard store.followActive, let active, destination == .codex || destination == .claude else { return }
+            destination = active == .codex ? .codex : .claude
+        }
     }
     private var header: some View {
         HStack(alignment: .top) {
@@ -63,6 +68,8 @@ struct DashboardView: View {
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
+            Toggle(isOn: $store.followActive) { Label("Follow active tool", systemImage: "bolt.horizontal") }
+                .toggleStyle(.button).buttonStyle(.glass).help("Switch to Codex or Claude Code automatically as you use them")
             Button { Task { await store.refresh() } } label: {
                 Label(store.isRefreshing ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
             }.disabled(store.isRefreshing).buttonStyle(.glass).accessibilityLabel("Refresh usage from local sources")
@@ -80,9 +87,9 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 24) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 16) {
-                    ForEach(ProviderID.allCases) { provider in QuotaCard(snapshot: store.snapshot(for: provider)).frame(minWidth: 265) }
+                    ForEach(store.orderedProviders) { provider in QuotaCard(snapshot: store.snapshot(for: provider), inUse: store.followActive && store.activeProvider == provider).frame(minWidth: 265) }
                 }
-                VStack(spacing: 16) { ForEach(ProviderID.allCases) { provider in QuotaCard(snapshot: store.snapshot(for: provider)) } }
+                VStack(spacing: 16) { ForEach(store.orderedProviders) { provider in QuotaCard(snapshot: store.snapshot(for: provider), inUse: store.followActive && store.activeProvider == provider) } }
             }
             sectionTitle("Latest activity", detail: "Local session metadata · not account quota")
             if store.sessions.isEmpty { emptySessions }
@@ -96,7 +103,7 @@ struct DashboardView: View {
     }
     private func providerPage(_ provider: ProviderID) -> some View {
         LazyVStack(alignment: .leading, spacing: 20) {
-            QuotaCard(snapshot: store.snapshot(for: provider))
+            QuotaCard(snapshot: store.snapshot(for: provider), inUse: store.followActive && store.activeProvider == provider)
             sectionTitle("Session breakdown", detail: "Reported fields only · missing values stay unavailable")
             let sessions = store.sessions.filter { $0.provider == provider }
             if sessions.isEmpty { emptySessions }
@@ -162,12 +169,18 @@ struct DashboardView: View {
 
 struct QuotaCard: View {
     let snapshot: ProviderSnapshot
+    var inUse = false
     @State private var showsDetails = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 ProviderMark(provider: snapshot.id, size: 24)
                 Text(snapshot.id.title).font(.title3.weight(.semibold))
+                if inUse {
+                    HStack(spacing: 5) { Circle().fill(UsagePalette.color(0)).frame(width: 7, height: 7); Text("IN USE") }
+                        .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.vertical, 3).background(Color.primary.opacity(0.07), in: Capsule())
+                }
                 Spacer()
                 if snapshot.capturedAt == nil { Text("AWAITING DATA").font(.caption2.weight(.medium)).foregroundStyle(.secondary) }
                 else if snapshot.isStale { Text("STALE").font(.caption2.weight(.bold)).foregroundStyle(.orange) }
