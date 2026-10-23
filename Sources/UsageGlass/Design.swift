@@ -1,36 +1,26 @@
 import SwiftUI
 
-/// Shared design language: green below 80%, easing to amber at 80%, then to red at 90%.
+/// Shared design language: green below 80%, amber from 80%, red from 90%.
 enum UsagePalette {
     static let green = (r: 0.20, g: 0.78, b: 0.45)
     static let amber = (r: 1.00, g: 0.69, b: 0.12)
     static let red   = (r: 0.96, g: 0.26, b: 0.24)
 
-    /// Colour for a usage percentage (0...100).
+    /// Colour for a usage percentage (0...100). The whole bar takes one colour:
+    /// green below 80%, amber from 80%, red from 90%.
     static func color(_ percent: Double) -> Color {
         let p = min(max(percent, 0), 100)
-        switch p {
-        case ..<65: return rgb(green)
-        case ..<80: return mix(green, amber, (p - 65) / 15)
-        case ..<90: return mix(amber, red, (p - 80) / 10)
-        default: return rgb(red)
-        }
+        return p >= 90 ? rgb(red) : p >= 80 ? rgb(amber) : rgb(green)
     }
     private static func rgb(_ c: (r: Double, g: Double, b: Double)) -> Color { Color(red: c.r, green: c.g, blue: c.b) }
-    private static func mix(_ a: (r: Double, g: Double, b: Double), _ b: (r: Double, g: Double, b: Double), _ t: Double) -> Color {
-        Color(red: a.r + (b.r - a.r) * t, green: a.g + (b.g - a.g) * t, blue: a.b + (b.b - a.b) * t)
-    }
-    /// Gradient that follows the track: each position shows the colour for that percentage,
-    /// so a bar filled to 85% visibly runs green → amber → orange-red.
-    static func gradient(upTo percent: Double) -> LinearGradient {
-        let end = min(max(percent, 0), 100)
-        let steps = stride(from: 0.0, through: end, by: max(end / 12, 1)).map { $0 } + [end]
-        let stops = steps.enumerated().map { _, p in Gradient.Stop(color: color(p), location: end == 0 ? 0 : p / end) }
-        return LinearGradient(stops: stops, startPoint: .leading, endPoint: .trailing)
+    /// Subtle same-hue sheen so the single colour still feels like glass.
+    static func fill(for percent: Double) -> LinearGradient {
+        let base = color(percent)
+        return LinearGradient(colors: [base.opacity(0.85), base], startPoint: .leading, endPoint: .trailing)
     }
 }
 
-/// Horizontal gradient capsule bar.
+/// Horizontal capsule bar, one colour for the whole fill.
 struct GradientBar: View {
     let value: Double?
     var height: CGFloat = 6
@@ -40,7 +30,7 @@ struct GradientBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.09))
                 if let safe, safe > 0 {
-                    Capsule().fill(UsagePalette.gradient(upTo: safe))
+                    Capsule().fill(UsagePalette.fill(for: safe))
                         .frame(width: max(geo.size.width * safe / 100, height))
                         .shadow(color: UsagePalette.color(safe).opacity(0.35), radius: 3)
                 }

@@ -17,7 +17,7 @@ struct DashboardView: View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(spacing: 10) {
-                    Image(systemName: "chart.bar.xaxis").font(.title2).foregroundStyle(UsagePalette.gradient(upTo: 100))
+                    Image(systemName: "chart.bar.xaxis").font(.title2).foregroundStyle(LinearGradient(colors: [UsagePalette.color(0), UsagePalette.color(85), UsagePalette.color(95)], startPoint: .leading, endPoint: .trailing))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Usage Glass").font(.headline)
                         Text("A little more clarity.").font(.caption).foregroundStyle(.secondary)
