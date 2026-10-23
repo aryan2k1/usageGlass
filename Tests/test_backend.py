@@ -27,15 +27,17 @@ class BackendTests(unittest.TestCase):
   self.assertEqual(json.loads(b.SETTINGS.read_text())['statusLine']['command'],'new')
  def _transcript(self,rows):
   d=b.HOME/'.claude/projects/p';d.mkdir(parents=True);(d/'s.jsonl').write_text('\n'.join(json.dumps(r) for r in rows))
- def test_claude_token_windows_dedupe_and_span(self):
+ def test_claude_token_stats_dedupe_span_and_detail(self):
   now=time.time();iso=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
-  row=lambda mid,t,n:{'type':'assistant','requestId':'r'+mid,'timestamp':iso(t),'message':{'id':mid,'model':'m','usage':{'input_tokens':n,'output_tokens':0,'cache_read_input_tokens':999}}}
-  self._transcript([row('a',now-60,10),row('a',now-60,10),row('b',now-6*3600,100),row('c',now-9*86400,1000)])
-  wins,_=b.claude_token_windows(now);by={w['id']:w['note'] for w in wins}
-  self.assertTrue(by['tokens_5h'].startswith('10 tokens'));self.assertTrue(by['tokens_7d'].startswith('110 tokens'))
+  row=lambda mid,t,n,m='opus':{'type':'assistant','requestId':'r'+mid,'timestamp':iso(t),'message':{'id':mid,'model':m,'usage':{'input_tokens':n,'output_tokens':2,'cache_creation_input_tokens':3,'cache_read_input_tokens':100}}}
+  self._transcript([row('a',now-60,10),row('a',now-60,10),row('b',now-6*3600,100,'sonnet'),row('c',now-9*86400,1000)])
+  stats,_=b.claude_token_stats(now);by={x['id']:x for x in stats}
+  self.assertEqual(by['tokens_5h']['total'],15);self.assertEqual(by['tokens_5h']['messages'],1)
+  self.assertEqual(by['tokens_7d']['total'],15+105);self.assertEqual(by['tokens_7d']['cacheRead'],200)
+  self.assertEqual({m['model'] for m in by['tokens_7d']['models']},{'opus','sonnet'})
  def test_claude_snapshot_falls_back_to_tokens_without_bridge(self):
   now=time.time();self._transcript([{'type':'assistant','requestId':'r','timestamp':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(now)),'message':{'id':'a','model':'m','usage':{'input_tokens':5,'output_tokens':1}}}])
-  snap,_=b.claude_snapshot();self.assertEqual(len(snap['windows']),2);self.assertIsNone(snap['windows'][0]['usedPercent']);self.assertIn('connect the bridge',snap['status'])
+  snap,_=b.claude_snapshot();self.assertEqual(snap['windows'],[]);self.assertEqual(len(snap['tokenStats']),3);self.assertIn('connect the bridge',snap['status'])
  def test_claude_snapshot_keeps_last_bridge_reading(self):
   b.atomic(b.BASE/'claude-usage.json',{'capturedAt':time.time()-7200,'session_id':'x','rate_limits':{'five_hour':{'used_percentage':41,'resets_at':time.time()+3600},'seven_day':{'used_percentage':11,'resets_at':time.time()-5}}})
   snap,_=b.claude_snapshot();w={x['id']:x for x in snap['windows']}

@@ -57,13 +57,15 @@ struct MenuProviderRow: View {
                         ProviderMark(provider: provider, size: 17)
                         Text(provider.title).font(.subheadline.weight(.medium))
                         Spacer()
-                        Text(value.map { "\(Int($0.rounded()))%" } ?? "—")
-                            .font(.subheadline.weight(.semibold)).monospacedDigit()
-                            .foregroundStyle(value.map(UsagePalette.color) ?? .secondary)
+                        if let value {
+                            Text("\(Int(value.rounded()))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(UsagePalette.color(value))
+                        } else if let tokens = snapshot.tokenStats?.first {
+                            Text(tokens.total.compactTokens + " tok").font(.subheadline.weight(.semibold)).monospacedDigit()
+                        } else { Text("—").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary) }
                         Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                             .rotationEffect(.degrees(expanded ? 90 : 0))
                     }
-                    GradientBar(value: value, height: 5)
+                    if value != nil || snapshot.tokenStats == nil { GradientBar(value: value, height: 5) }
                     Text(caption(snapshot, top)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain)
@@ -89,6 +91,11 @@ struct MenuProviderRow: View {
                     if let line = windowLine(window) { Text(line).font(.caption2).foregroundStyle(.secondary) }
                 }
             }
+            if let stats = snapshot.tokenStats, !stats.isEmpty {
+                if !snapshot.windows.isEmpty { Divider() }
+                Text("Token activity").font(.caption.weight(.semibold))
+                TokenStatsView(stats: stats, compact: true)
+            }
             Text(snapshot.status).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let age = snapshot.ageText { Text("Updated \(age)").font(.caption2).foregroundStyle(.tertiary) }
         }
@@ -109,7 +116,7 @@ struct MenuProviderRow: View {
         if let top {
             parts.append(top.label.components(separatedBy: " · ").last ?? top.label)
             if let reset = top.resetsAt, reset > Date() { parts.append("resets " + reset.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))) }
-        } else if let token = snapshot.windows.first?.note { parts.append(token) }
+        } else if let first = snapshot.tokenStats?.first { parts.append("\(first.label.lowercased()) · \(first.messages.formatted()) msgs") }
         else { parts.append(snapshot.status) }
         if snapshot.capturedAt == nil { parts.append("no data") }
         else if snapshot.isStale { parts.append("stale" + (snapshot.ageText.map { " · \($0)" } ?? "")) }

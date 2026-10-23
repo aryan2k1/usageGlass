@@ -78,3 +78,66 @@ private struct ClaudeSpark: Shape {
         return path
     }
 }
+
+/// Number-first token panel: one column per span with the total, then the breakdown.
+struct TokenStatsView: View {
+    let stats: [TokenStats]
+    var compact = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 8 : 14) {
+            if compact {
+                ForEach(stats) { stat in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(stat.label).font(.caption)
+                        Spacer()
+                        Text(stat.total.compactTokens).font(.caption.weight(.semibold)).monospacedDigit()
+                    }
+                    Text(breakdown(stat)).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 22) { ForEach(stats) { column($0) } }
+                    VStack(alignment: .leading, spacing: 16) { ForEach(stats) { column($0) } }
+                }
+                if let widest = stats.max(by: { $0.total < $1.total }), widest.cacheHitRatio != nil || !widest.models.isEmpty {
+                    Divider().opacity(0.5)
+                    insights(widest)
+                }
+            }
+            Text("Tokens are activity from local transcripts, not quota. Cache reads are listed separately and not added to totals.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    private func breakdown(_ s: TokenStats) -> String {
+        var parts = ["\(s.input.compactTokens) in", "\(s.output.compactTokens) out", "\(s.cacheWrite.compactTokens) cache write", "\(s.cacheRead.compactTokens) cache read"]
+        parts.append("\(s.messages.formatted()) msgs")
+        return parts.joined(separator: " · ")
+    }
+    private func column(_ s: TokenStats) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(s.label).font(.caption).foregroundStyle(.secondary)
+            Text(s.total.compactTokens).font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+            Group {
+                row("Input", s.input); row("Output", s.output); row("Cache write", s.cacheWrite); row("Cache read", s.cacheRead)
+                HStack { Text("Messages"); Spacer(minLength: 12); Text("\(s.messages.formatted()) · \(s.sessions) session\(s.sessions == 1 ? "" : "s")").monospacedDigit() }
+            }.font(.caption).foregroundStyle(.secondary)
+            if s.partial == true { Text("Partial: long transcripts truncated").font(.caption2).foregroundStyle(.orange) }
+        }.frame(minWidth: 150, alignment: .leading)
+    }
+    private func row(_ name: String, _ value: Int) -> some View {
+        HStack { Text(name); Spacer(minLength: 12); Text(value.compactTokens).monospacedDigit() }
+    }
+    private func insights(_ s: TokenStats) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let ratio = s.cacheHitRatio {
+                HStack { Text("Cache hit rate (\(s.label.lowercased()))").font(.caption); Spacer(); Text("\(Int((ratio * 100).rounded()))% of context served from cache").font(.caption).monospacedDigit() }
+            }
+            if !s.models.isEmpty {
+                Text("By model (\(s.label.lowercased()))").font(.caption).foregroundStyle(.secondary)
+                ForEach(s.models, id: \.self) { m in
+                    HStack { Text(m.model).font(.caption); Spacer(); Text(m.tokens.compactTokens).font(.caption.weight(.medium)).monospacedDigit() }
+                }
+            }
+        }
+    }
+}

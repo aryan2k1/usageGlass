@@ -239,11 +239,13 @@ def uninstall():
     (BASE/'bridge-state.json').unlink()
     return 'Bridge removed; previous status line restored. Backup retained locally.'
 
-def claude_token_windows(now=None):
-    """Tokens from local Claude Code transcripts in the last 5 hours / 7 days (not quota %)."""
+def claude_token_stats(now=None):
+    """Token activity from local Claude Code transcripts for several spans. This is activity, not quota."""
     now=now or time.time()
-    spans=(('tokens_5h','5-hour · tokens',5*3600),('tokens_7d','7-day · tokens',7*86400))
-    totals={k:0 for k,_,_ in spans};seen={};partial=False;found=False
+    midnight=datetime.datetime.fromtimestamp(now).replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+    spans=(('tokens_5h','Last 5 hours',now-5*3600),('tokens_today','Today',midnight),('tokens_7d','Last 7 days',now-7*86400))
+    fields=('input_tokens','output_tokens','cache_creation_input_tokens','cache_read_input_tokens')
+    seen={};partial=False
     for modified,path in recent_files(HOME/'.claude/projects',60):
         if now-modified>7*86400: continue
         try: records,truncated=read_tail(path)
@@ -255,23 +257,32 @@ def claude_token_windows(now=None):
             ts=timestamp(row.get('timestamp'))
             if not isinstance(usage,dict) or not mid or ts is None or message.get('model')=='<synthetic>': continue
             key=(mid,row.get('requestId'))
-            tokens=sum(number(usage.get(k)) or 0 for k in ('input_tokens','output_tokens','cache_creation_input_tokens'))
-            if key in seen and seen[key][1]>=tokens: continue
-            seen[key]=(ts,tokens);found=True
-    for ts,tokens in seen.values():
-        for k,_,span in spans:
-            if now-ts<=span: totals[k]+=tokens
-    if not found: return [],False
-    return [dict(id=k,label=name,usedPercent=None,resetsAt=None,windowMinutes=span//60,note=f"{int(totals[k]):,} tokens (excl. cache reads)"+(' · partial' if partial else '')) for k,name,span in spans],partial
+            vals={f:number(usage.get(f)) or 0 for f in fields}
+            size=vals['input_tokens']+vals['output_tokens']+vals['cache_creation_input_tokens']
+            if key in seen and seen[key]['size']>=size: continue
+            seen[key]=dict(ts=ts,size=size,model=str(message.get('model') or 'unknown')[:64],session=path.stem,**vals)
+    if not seen: return [],False
+    stats=[]
+    for sid,name,start in spans:
+        rows=[r for r in seen.values() if r['ts']>=start]
+        total=lambda f:int(sum(r[f] for r in rows))
+        by_model={}
+        for r in rows: by_model[r['model']]=by_model.get(r['model'],0)+r['size']
+        reads,fresh,writes=total('cache_read_input_tokens'),total('input_tokens'),total('cache_creation_input_tokens')
+        context=reads+fresh+writes
+        stats.append(dict(id=sid,label=name,total=total('input_tokens')+total('output_tokens')+writes,input=fresh,output=total('output_tokens'),cacheWrite=writes,cacheRead=reads,
+            messages=len(rows),sessions=len({r['session'] for r in rows}),cacheHitRatio=(reads/context if context else None),
+            models=[dict(model=m,tokens=int(t)) for m,t in sorted(by_model.items(),key=lambda x:-x[1])[:4]],partial=partial))
+    return stats,partial
 
 def claude_snapshot():
-    token_windows,partial=[],False
-    try: token_windows,partial=claude_token_windows()
+    stats,partial=[],False
+    try: stats,partial=claude_token_stats()
     except Exception: pass
     try: data=read_json(BASE/'claude-usage.json')
     except Exception:
-        if token_windows:
-            return dict(id='claude',windows=token_windows,capturedAt=time.time(),source='Local Claude Code transcripts',status='Token activity only · connect the bridge for quota %'+(' (partial)' if partial else ''),details=['Quota percentages need the Claude status-line bridge (Connections).']),[]
+        if stats:
+            return dict(id='claude',windows=[],tokenStats=stats,capturedAt=time.time(),source='Local Claude Code transcripts',status='Token activity only · connect the bridge for quota %'+(' (partial)' if partial else ''),details=['Quota percentages need the Claude status-line bridge (Connections).']),[]
         return dict(id='claude',windows=[],source='Claude supported status-line bridge',status='Waiting for bridge',details=['Limits appear after a Claude API response for supported subscriptions.']),[]
     windows=[window(k,v) for k,v in data.get('rate_limits',{}).items()]
     details=[]
@@ -287,7 +298,7 @@ def claude_snapshot():
     for w in windows:
         reset=w.get('resetsAt')
         if reset is not None and reset<time.time(): w['usedPercent']=None; w['note']='Window reset since last reading'
-    return dict(id='claude',windows=windows+token_windows,capturedAt=data['capturedAt'],source='Claude supported status-line bridge',status='Connected' if windows else 'Connected · limits unavailable',details=details),[session]
+    return dict(id='claude',windows=windows,tokenStats=stats,capturedAt=data['capturedAt'],source='Claude supported status-line bridge',status='Connected' if windows else 'Connected · limits unavailable',details=details),[session]
 
 def recent_files(root,limit=40):
     if not root.exists(): return []

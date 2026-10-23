@@ -179,6 +179,11 @@ struct QuotaCard: View {
                     QuotaBar(label: window.label, value: window.usedPercent, reset: window.resetsAt, tint: snapshot.id.tint, note: window.note)
                 }
             }
+            if let stats = snapshot.tokenStats, !stats.isEmpty {
+                Divider().opacity(0.5)
+                Text("Token activity").font(.subheadline.weight(.semibold))
+                TokenStatsView(stats: stats)
+            }
             Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 6) {
                 Text(snapshot.status).font(.caption.weight(.medium))
