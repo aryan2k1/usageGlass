@@ -7,7 +7,9 @@ SETTINGS = HOME / '.claude/settings.json'
 MAX_BYTES = 2 * 1024 * 1024
 
 def number(value):
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+        return min(value, 2**53)
+    return None
 
 def atomic(path, obj, raw=False):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -63,6 +65,7 @@ def codex_response():
     p = subprocess.Popen([cli,'app-server'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
     answers, buffer, total = {}, b'', 0
     sel = selectors.DefaultSelector()
+    signal.signal(signal.SIGTERM,lambda *a: (_ for _ in ()).throw(SystemExit(1)))  # run cleanup if the app kills us
     try:
         sel.register(p.stdout,selectors.EVENT_READ)
         for req in [{'id':1,'method':'initialize','params':{'clientInfo':{'name':'usageglass','version':'0.1.0'}}},{'method':'initialized','params':{}},{'id':2,'method':'account/rateLimits/read','params':None},{'id':3,'method':'account/usage/read','params':{}}]:
@@ -92,11 +95,14 @@ def codex_response():
         return answers
     finally:
         sel.close()
-        try: os.killpg(p.pid,signal.SIGTERM)
-        except ProcessLookupError: pass
-        try: p.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid,signal.SIGKILL);p.wait()
+        for sig in (signal.SIGTERM,signal.SIGKILL):
+            try: os.killpg(p.pid,sig)
+            except (ProcessLookupError,PermissionError): pass
+            if sig==signal.SIGTERM:
+                try: p.wait(timeout=1)
+                except subprocess.TimeoutExpired: pass
+        try: p.wait(timeout=2)
+        except subprocess.TimeoutExpired: pass
 
 def codex_snapshot(result, activity):
     windows, details = [], []
@@ -121,7 +127,7 @@ def codex_snapshot(result, activity):
         for k,v in (activity.get('summary') or {}).items():
             if number(v) is not None: details.append('Account '+label(k).lower()+': '+formatted(k,v))
         for item in (activity.get('dailyUsageBuckets') or [])[-14:]:
-            if number(item.get('tokens')) is not None: details.append('Daily '+str(item.get('startDate',''))+': '+formatted('tokens',item['tokens'])+' tokens')
+            if isinstance(item,dict) and number(item.get('tokens')) is not None: details.append('Daily '+str(item.get('startDate',''))+': '+formatted('tokens',item['tokens'])+' tokens')
     else: details.append('Account token activity unavailable')
     return dict(id='codex',windows=windows,capturedAt=time.time(),source='Codex app-server · read-only account API',status='Connected',details=details)
 
@@ -149,11 +155,14 @@ def safe_bridge_payload(data):
     if isinstance(data.get('fast_mode'),bool): out['fast_mode']=data['fast_mode']
     return out
 
+def is_own_command(command):
+    return isinstance(command,str) and 'usageglass_backend.py' in command
+
 def run_previous(command, raw):
     # Existing trusted user configuration, with process-group deadline and output cap.
     with tempfile.TemporaryFile() as input_file:
         input_file.write(raw);input_file.seek(0)
-        proc=subprocess.Popen(command,shell=True,stdin=input_file,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+        proc=subprocess.Popen(command,shell=True,env={**os.environ,'USAGEGLASS_BRIDGE':'1'},stdin=input_file,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
         sel=selectors.DefaultSelector();sel.register(proc.stdout,selectors.EVENT_READ)
         end=time.monotonic()+3;output=b''
         try:
@@ -172,11 +181,19 @@ def run_previous(command, raw):
 def bridge():
     raw=sys.stdin.buffer.read(MAX_BYTES+1)
     try:
-        if len(raw)<=MAX_BYTES: atomic(BASE/'claude-usage.json',safe_bridge_payload(json.loads(raw)))
+        if len(raw)<=MAX_BYTES:
+            fresh=safe_bridge_payload(json.loads(raw))
+            if not fresh.get('rate_limits'):
+                try:
+                    old=read_json(BASE/'claude-usage.json')
+                    if old.get('rate_limits'): fresh['rate_limits']=old['rate_limits'];fresh['limitsCapturedAt']=old.get('limitsCapturedAt',old.get('capturedAt'))
+                except Exception: pass
+            else: fresh['limitsCapturedAt']=fresh['capturedAt']
+            atomic(BASE/'claude-usage.json',fresh)
     except Exception: pass
     try:
         previous=read_json(BASE/'bridge-state.json').get('previous')
-        if isinstance(previous,dict) and previous.get('type')=='command' and isinstance(previous.get('command'),str):
+        if isinstance(previous,dict) and previous.get('type')=='command' and isinstance(previous.get('command'),str) and not is_own_command(previous['command']) and not os.environ.get('USAGEGLASS_BRIDGE'):
             # Run the user's unchanged pre-existing status line, never interpolate JSON.
             run_previous(previous['command'],raw)
         else: print('Usage Glass connected')
@@ -187,7 +204,7 @@ def install():
     settings=read_json(SETTINGS) if SETTINGS.exists() else {}
     if not isinstance(settings,dict): raise ValueError('settings')
     script=BASE/'usageglass_backend.py'
-    command='/usr/bin/python3 '+"'"+str(script).replace("'","'\\''")+"' --bridge"
+    command='/usr/bin/python3 -I '+"'"+str(script).replace("'","'\\''")+"' --bridge"
     desired=dict(settings.get('statusLine') or {})
     desired.update(type='command',command=command)
     state=BASE/'bridge-state.json'
@@ -195,12 +212,19 @@ def install():
         saved=read_json(state)
         if settings.get('statusLine')==saved.get('installed'): return 'Bridge already installed. Start or refresh a Claude Code session.'
         raise ValueError('existing installation changed')
+    prior=settings.get('statusLine')
+    if isinstance(prior,dict) and is_own_command(prior.get('command')):
+        raise ValueError('bridge command already present without saved state; remove it from settings first')
     original=SETTINGS.read_bytes() if SETTINGS.exists() else b'{}'
     atomic(BASE/'settings.before-usageglass.json',original,True)
     atomic(script,pathlib.Path(__file__).read_bytes(),True)
     atomic(state,{'previous':settings.get('statusLine'),'hadPrevious':'statusLine' in settings,'installed':desired})
     settings['statusLine']=desired
-    atomic(SETTINGS,settings)
+    try: atomic(SETTINGS,settings)
+    except Exception:
+        try: state.unlink()
+        except OSError: pass
+        raise
     return 'Bridge installed. Start or refresh a Claude Code session to receive usage.'
 
 def uninstall():
@@ -219,7 +243,7 @@ def claude_token_windows(now=None):
     """Tokens from local Claude Code transcripts in the last 5 hours / 7 days (not quota %)."""
     now=now or time.time()
     spans=(('tokens_5h','5-hour · tokens',5*3600),('tokens_7d','7-day · tokens',7*86400))
-    totals={k:0 for k,_,_ in spans};seen=set();partial=False;found=False
+    totals={k:0 for k,_,_ in spans};seen={};partial=False;found=False
     for modified,path in recent_files(HOME/'.claude/projects',60):
         if now-modified>7*86400: continue
         try: records,truncated=read_tail(path)
@@ -231,14 +255,14 @@ def claude_token_windows(now=None):
             ts=timestamp(row.get('timestamp'))
             if not isinstance(usage,dict) or not mid or ts is None or message.get('model')=='<synthetic>': continue
             key=(mid,row.get('requestId'))
-            if key in seen: continue
-            seen.add(key)
             tokens=sum(number(usage.get(k)) or 0 for k in ('input_tokens','output_tokens','cache_creation_input_tokens'))
-            found=True
-            for k,_,span in spans:
-                if now-ts<=span: totals[k]+=tokens
+            if key in seen and seen[key][1]>=tokens: continue
+            seen[key]=(ts,tokens);found=True
+    for ts,tokens in seen.values():
+        for k,_,span in spans:
+            if now-ts<=span: totals[k]+=tokens
     if not found: return [],False
-    return [dict(id=k,label=name,usedPercent=None,resetsAt=None,windowMinutes=span//60,note=f"{int(totals[k]):,} tokens (excl. cache reads)") for k,name,span in spans],partial
+    return [dict(id=k,label=name,usedPercent=None,resetsAt=None,windowMinutes=span//60,note=f"{int(totals[k]):,} tokens (excl. cache reads)"+(' · partial' if partial else '')) for k,name,span in spans],partial
 
 def claude_snapshot():
     token_windows,partial=[],False
@@ -268,12 +292,12 @@ def claude_snapshot():
 def recent_files(root,limit=40):
     if not root.exists(): return []
     found=[];stack=[root];visited=0
-    while stack and visited<3000:
+    while stack and visited<50000:
         directory=stack.pop()
         try:
             for entry in os.scandir(directory):
                 visited+=1
-                if visited>3000: break
+                if visited>50000: break
                 if entry.is_symlink(): continue
                 if entry.is_dir(follow_symlinks=False): stack.append(pathlib.Path(entry.path))
                 elif entry.name.endswith('.jsonl'): found.append((entry.stat().st_mtime,pathlib.Path(entry.path)))

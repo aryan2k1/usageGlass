@@ -40,6 +40,22 @@ class BackendTests(unittest.TestCase):
   b.atomic(b.BASE/'claude-usage.json',{'capturedAt':time.time()-7200,'session_id':'x','rate_limits':{'five_hour':{'used_percentage':41,'resets_at':time.time()+3600},'seven_day':{'used_percentage':11,'resets_at':time.time()-5}}})
   snap,_=b.claude_snapshot();w={x['id']:x for x in snap['windows']}
   self.assertEqual(w['five_hour']['usedPercent'],41);self.assertIsNone(w['seven_day']['usedPercent'])
+ def test_install_refuses_own_command_without_state(self):
+  b.install();(b.BASE/'bridge-state.json').unlink()
+  with self.assertRaises(ValueError): b.install()
+ def test_failed_install_leaves_no_state(self):
+  b.SETTINGS.parent.mkdir();b.SETTINGS.write_text('{}')
+  real=b.atomic
+  def boom(path,obj,raw=False):
+   if path==b.SETTINGS: raise OSError('disk full')
+   return real(path,obj,raw)
+  b.atomic=boom
+  try:
+   with self.assertRaises(OSError): b.install()
+  finally: b.atomic=real
+  self.assertFalse((b.BASE/'bridge-state.json').exists());b.install()
+ def test_numbers_clamped(self):
+  self.assertLessEqual(b.number(1e30),2**53)
  def test_symlink_settings_rejected(self):
   b.SETTINGS.parent.mkdir();target=b.HOME/'target';target.write_text('{}');b.SETTINGS.symlink_to(target)
   with self.assertRaises(ValueError):b.install()

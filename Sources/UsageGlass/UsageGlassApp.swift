@@ -28,9 +28,10 @@ struct UsageGlassApp: App {
             MenuLabel().environmentObject(store)
                 .task {
                     await store.refresh()
+                    await store.refreshWebLimits()
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .seconds(120))
-                        if !Task.isCancelled { await store.refresh() }
+                        if !Task.isCancelled { await store.refresh(); await store.refreshWebLimits() }
                     }
                 }
         }

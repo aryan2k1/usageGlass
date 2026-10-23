@@ -23,8 +23,8 @@ final class ClaudeWebLimits: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     func connect() {
+        if let existing = loginWindow { existing.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         let view = makeWebView()
-        view.navigationDelegate = self
         view.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Sign in to claude.ai"
@@ -34,19 +34,24 @@ final class ClaudeWebLimits: NSObject, ObservableObject, WKNavigationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         loginWindow = window
+        if let old = closeObserver { NotificationCenter.default.removeObserver(old) }
         closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                self.loginWindow = nil
+                // Only count as connected if the sign-in left the login page.
+                let signedIn = view.url?.host == self.allowedHost && view.url?.path.hasPrefix("/login") == false
+                guard signedIn else { return }
                 self.isConnected = true
                 UserDefaults.standard.set(true, forKey: "claudeWebConnected")
                 self.lastFetch = nil
-                self.loginWindow = nil
                 await self.refresh(force: true)
             }
         }
     }
 
     func disconnect() async {
+        loginWindow?.close()
         isConnected = false
         UserDefaults.standard.set(false, forKey: "claudeWebConnected")
         windows = []
@@ -82,6 +87,11 @@ final class ClaudeWebLimits: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func load(_ view: WKWebView, _ url: URL) async throws {
+        let timeout = Task { @MainActor [weak self] in
+            try await Task.sleep(for: .seconds(20))
+            self?.finish(URLError(.timedOut))
+        }
+        defer { timeout.cancel() }
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             continuation = c
             view.load(URLRequest(url: url))
@@ -95,8 +105,14 @@ final class ClaudeWebLimits: NSObject, ObservableObject, WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { Task { @MainActor in finish(nil) } }
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { Task { @MainActor in finish(error) } }
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { Task { @MainActor in finish(error) } }
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { Task { @MainActor in finish(URLError(.networkConnectionLost)) } }
+    /// The hidden refresh view may only visit claude.ai over https; the interactive login view has no delegate and can use SSO.
     nonisolated func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        decisionHandler(action.request.url?.scheme == "https" ? .allow : .cancel)
+        let url = action.request.url
+        let host = url?.host ?? ""
+        let ok = url?.scheme == "https" && (host == "claude.ai" || host.hasSuffix(".claude.ai"))
+        let subframe = action.targetFrame.map { !$0.isMainFrame } ?? false
+        decisionHandler(ok || subframe ? .allow : .cancel)
     }
 
     /// Keeps only entries shaped like {utilization | used_percentage: number, resets_at: ISO string}.

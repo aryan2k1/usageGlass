@@ -26,7 +26,7 @@ enum Providers {
             }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            process.arguments = [script.path, argument]
+            process.arguments = ["-I", script.path, argument]
             let output = Pipe()
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice

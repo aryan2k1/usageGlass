@@ -28,10 +28,7 @@ final class UsageStore: ObservableObject {
                 retained.error = incoming.error
                 return retained
             }
-            await webLimits.refresh()
-            if let i = snapshots.firstIndex(where: { $0.id == .claude }), !webLimits.windows.isEmpty {
-                snapshots[i].windows = webLimits.windows + snapshots[i].windows
-            }
+            applyWebLimits()
             sessions = result.sessions
             if !isChangingBridge { bridgeStatus = result.bridgeStatus }
             lastRefresh = Date()
@@ -43,6 +40,15 @@ final class UsageStore: ObservableObject {
                 return retained
             }
         }
+    }
+    private func applyWebLimits() {
+        guard let i = snapshots.firstIndex(where: { $0.id == .claude }) else { return }
+        snapshots[i].windows = webLimits.windows + snapshots[i].windows.filter { !$0.id.hasPrefix("web:") }
+    }
+    /// Web limits refresh separately so a slow claude.ai page can never block the main refresh.
+    func refreshWebLimits() async {
+        await webLimits.refresh()
+        applyWebLimits()
     }
     func installClaudeBridge() async {
         guard !isChangingBridge else { return }
