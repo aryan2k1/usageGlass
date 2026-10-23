@@ -11,6 +11,7 @@ A native macOS menu-bar app that shows how much of your **Codex** and **Claude C
 - **Claude Code**: 5-hour and 7-day limits via Claude Code's supported status-line feed, plus context, cost and prompt-cache details.
 - **Always something to show for Claude**: the last known limit reading is kept (with its age), and token totals for the last 5 hours / 7 days are derived from local transcripts even before the bridge is connected.
 - **claude.ai chat limits (experimental, opt-in)**: sign in inside the app to see your normal claude.ai limits.
+- **Follows the tool you're using**: Usage Glass watches for fresh Codex or Claude Code activity (file timestamps only, never contents). The menu bar then shows just that tool, its dropdown row opens first with an "In use" tag, and the dashboard reorders and follows. After 10 quiet minutes it shows both again. Toggle with the ⚡ button in the dropdown or **Follow active tool** in the dashboard.
 - **Dashboard**: overview, per-provider pages, recent sessions with input/output/cache/reasoning tokens, and a Connections page.
 - **Private by design**: no cloud service, no analytics, no remote listener, no prompt or response text stored.
 

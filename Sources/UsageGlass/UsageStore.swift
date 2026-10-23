@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 @MainActor
 final class UsageStore: ObservableObject {
@@ -10,6 +11,31 @@ final class UsageStore: ObservableObject {
     @Published var bridgeStatus = "Bridge not installed"
     private var isChangingBridge = false
     let webLimits = ClaudeWebLimits()
+    /// The tool in use right now (nil = neither recently). Drives the menu bar, dropdown order and dashboard focus.
+    @Published private(set) var activeProvider: ProviderID?
+    @Published var followActive: Bool = UserDefaults.standard.object(forKey: "followActiveTool") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(followActive, forKey: "followActiveTool") }
+    }
+    /// Providers in display order: the active one first when following.
+    var orderedProviders: [ProviderID] {
+        guard followActive, let activeProvider else { return ProviderID.allCases }
+        return [activeProvider] + ProviderID.allCases.filter { $0 != activeProvider }
+    }
+    /// Provider the menu bar should show, or nil to show both.
+    var focusedProvider: ProviderID? { followActive ? activeProvider : nil }
+
+    /// Cheap file-timestamp poll, independent of the slower usage refresh.
+    func monitorActivity() async {
+        while !Task.isCancelled {
+            let latest = await Task.detached(priority: .utility) { ActivityProbe.latest() }.value
+            let next = ActivityProbe.choose(latest: latest, previous: activeProvider)
+            if next != activeProvider {
+                withAnimation(.snappy(duration: 0.25)) { activeProvider = next }
+                if next != nil { await refresh() }
+            }
+            try? await Task.sleep(for: .seconds(5))
+        }
+    }
 
     init() {}
     func snapshot(for provider: ProviderID) -> ProviderSnapshot {

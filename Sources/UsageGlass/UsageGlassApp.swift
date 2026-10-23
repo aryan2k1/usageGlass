@@ -26,6 +26,7 @@ struct UsageGlassApp: App {
             MenuPanel().environmentObject(store)
         } label: {
             MenuLabel().environmentObject(store)
+                .task { await store.monitorActivity() }
                 .task {
                     await store.refresh()
                     await store.refreshWebLimits()
