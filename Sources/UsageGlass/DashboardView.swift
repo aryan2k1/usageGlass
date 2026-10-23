@@ -4,6 +4,7 @@ import AppKit
 private enum Destination: String, CaseIterable, Identifiable {
     case overview = "Overview", codex = "Codex", claude = "Claude", sessions = "Sessions", connections = "Connections"
     var id: String { rawValue }
+    var provider: ProviderID? { self == .codex ? .codex : (self == .claude ? .claude : nil) }
     var symbol: String {
         switch self { case .overview: "square.grid.2x2"; case .codex: "terminal"; case .claude: "sparkle"; case .sessions: "list.bullet.rectangle"; case .connections: "point.3.connected.trianglepath.dotted" }
     }
@@ -16,14 +17,18 @@ struct DashboardView: View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(spacing: 10) {
-                    Image(systemName: "chart.bar.xaxis").font(.title2).foregroundStyle(.teal)
+                    Image(systemName: "chart.bar.xaxis").font(.title2).foregroundStyle(LinearGradient(colors: [UsagePalette.color(0), UsagePalette.color(85), UsagePalette.color(95)], startPoint: .leading, endPoint: .trailing))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Usage Glass").font(.headline)
                         Text("A little more clarity.").font(.caption).foregroundStyle(.secondary)
                     }
                 }.padding(.horizontal, 18).padding(.top, 28)
                 List(Destination.allCases, selection: $destination) { item in
-                    Label(item.rawValue, systemImage: item.symbol).tag(item).padding(.vertical, 6)
+                    HStack(spacing: 10) {
+                        if let provider = item.provider { ProviderMark(provider: provider, size: 16).frame(width: 18) }
+                        else { Image(systemName: item.symbol).frame(width: 18) }
+                        Text(item.rawValue)
+                    }.tag(item).padding(.vertical, 6)
                 }.listStyle(.sidebar)
                 VStack(alignment: .leading, spacing: 6) {
                     Label("On this Mac", systemImage: "lock.shield").font(.caption.weight(.medium))
@@ -46,7 +51,7 @@ struct DashboardView: View {
             .background {
                 ZStack {
                     Color(nsColor: .windowBackgroundColor)
-                    LinearGradient(colors: [Color.teal.opacity(0.07), .clear, Color.orange.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    LinearGradient(colors: [UsagePalette.color(0).opacity(0.07), .clear, UsagePalette.color(85).opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing)
                 }.ignoresSafeArea()
             }
         }
@@ -118,7 +123,7 @@ struct DashboardView: View {
             ForEach(ProviderID.allCases) { provider in
                 let snapshot = store.snapshot(for: provider)
                 VStack(alignment: .leading, spacing: 14) {
-                    Label(provider.title, systemImage: provider.symbol).font(.title3.weight(.semibold)).foregroundStyle(provider.tint)
+                    HStack(spacing: 10) { ProviderMark(provider: provider, size: 24); Text(provider.title).font(.title3.weight(.semibold)) }
                     Text(snapshot.status).font(.headline)
                     Text(snapshot.source).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     if let error = snapshot.error { Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -161,7 +166,7 @@ struct QuotaCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Image(systemName: snapshot.id.symbol).font(.title3).foregroundStyle(snapshot.id.tint)
+                ProviderMark(provider: snapshot.id, size: 24)
                 Text(snapshot.id.title).font(.title3.weight(.semibold))
                 Spacer()
                 if snapshot.capturedAt == nil { Text("AWAITING DATA").font(.caption2.weight(.medium)).foregroundStyle(.secondary) }
@@ -173,6 +178,11 @@ struct QuotaCard: View {
                 ForEach(snapshot.windows) { window in
                     QuotaBar(label: window.label, value: window.usedPercent, reset: window.resetsAt, tint: snapshot.id.tint, note: window.note)
                 }
+            }
+            if let stats = snapshot.tokenStats, !stats.isEmpty {
+                Divider().opacity(0.5)
+                Text("Token activity").font(.subheadline.weight(.semibold))
+                TokenStatsView(stats: stats)
             }
             Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 6) {
@@ -200,7 +210,7 @@ struct QuotaBar: View {
     var showsReset: Bool = true
     var note: String? = nil
     private var safeValue: Double? { value.flatMap { $0.isFinite ? min(max($0, 0), 100) : nil } }
-    private var color: Color { (safeValue ?? 0) >= 95 ? .red : ((safeValue ?? 0) >= 80 ? .orange : tint) }
+    private var color: Color { UsagePalette.color(safeValue ?? 0) }
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
@@ -209,18 +219,13 @@ struct QuotaBar: View {
                 Text(safeValue.map { "\($0.formatted(.number.precision(.fractionLength(0))))% used" } ?? (note != nil ? "—" : "Unavailable"))
                     .font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(safeValue == nil ? Color.secondary : color)
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    if let value = safeValue { Capsule().fill(color.gradient).frame(width: geo.size.width * value / 100) }
-                }
-            }.frame(height: 7).accessibilityHidden(true)
+            GradientBar(value: safeValue, height: 8)
             HStack {
                 if showsReset, let reset { Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))") }
                 else if let note { Text(note) }
                 else if showsReset { Text("Reset time unavailable") }
                 Spacer()
-                if let value = safeValue, value >= 80 { Text(value >= 95 ? "Near limit" : "High usage").foregroundStyle(color) }
+                if let value = safeValue, value >= 80 { Text(value >= 90 ? "Near limit" : "High usage").foregroundStyle(color) }
             }.font(.caption2).foregroundStyle(.secondary)
         }.accessibilityElement(children: .combine)
     }
@@ -232,7 +237,7 @@ struct SessionCard: View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Label(session.provider.title, systemImage: session.provider.symbol).font(.headline).foregroundStyle(session.provider.tint)
+                    HStack(spacing: 8) { ProviderMark(provider: session.provider, size: 18); Text(session.provider.title).font(.headline) }
                     Text(session.scope).font(.caption2).foregroundStyle(.secondary)
                     Text(session.model ?? "Model unavailable").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }

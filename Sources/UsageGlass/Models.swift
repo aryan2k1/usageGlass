@@ -13,6 +13,26 @@ struct QuotaWindow: Identifiable, Codable, Sendable {
     var windowMinutes: Int?
     var note: String?
 }
+struct TokenModelShare: Codable, Sendable, Hashable { var model: String; var tokens: Int }
+/// Token activity for one span, read from local transcripts. This is activity, not quota.
+struct TokenStats: Identifiable, Codable, Sendable {
+    var id: String
+    var label: String
+    var total: Int
+    var input: Int
+    var output: Int
+    var cacheWrite: Int
+    var cacheRead: Int
+    var messages: Int
+    var sessions: Int
+    var cacheHitRatio: Double?
+    var models: [TokenModelShare]
+    var partial: Bool?
+}
+extension Int {
+    /// 134705 → "134.7K"
+    var compactTokens: String { self.formatted(.number.notation(.compactName).precision(.fractionLength(0...1))) }
+}
 struct ProviderSnapshot: Identifiable, Codable, Sendable {
     var id: ProviderID
     var windows: [QuotaWindow] = []
@@ -21,6 +41,7 @@ struct ProviderSnapshot: Identifiable, Codable, Sendable {
     var status: String
     var error: String?
     var details: [String] = []
+    var tokenStats: [TokenStats]? = nil
     // Claude only refreshes while Claude Code runs, so it tolerates a longer gap before being called stale.
     var isStale: Bool { error != nil || (capturedAt.map { Date().timeIntervalSince($0) > (id == .claude ? 6 * 3600 : 300) } ?? true) }
     var ageText: String? {
